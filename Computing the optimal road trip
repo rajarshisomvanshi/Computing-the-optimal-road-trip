@@ -1,409 +1,628 @@
-"""
-Randy Olson's Shortest Route Program modified By Andrew Liesinger to:
-    1: Detect waypoints file at runtime - if found use it, otherwise look up distances via google calls (and then save to waypoint file)
-    2: Dynamically create and open an HTML file showing the route when a shorter route is found
-    3: Make it easier to tinker with the Generation / Population parameters
-"""
-from __future__ import print_function
-from itertools import combinations
-import googlemaps
-import pandas as pd
-import numpy as np
-import os.path
-import random
-import webbrowser
-
-GOOGLE_MAPS_API_KEY = "Add you own API"
-waypoints_file = "/kaggle/input/my-waypoints-dist-dur/my-waypoints-dist-dur.tsv"
-
-#This is the general filename - as shorter routes are discovered the Population fitness score will be inserted into the filename
-#so that interim results are saved for comparision.  The actual filenames using the default below will be:
-#Output_<Population Fitness Score>.html 
-output_file = 'Output.html'
-
-#parameters for the Genetic algoritim
-thisRunGenerations=5000
-thisRunPopulation_size=100
-
-
-all_waypoints = ["USS Alabama, Battleship Parkway, Mobile, AL",
-                 "Grand Canyon National Park, Arizona",
-                 "Toltec Mounds, Scott, AR",
-                 "San Andreas Fault, San Benito County, CA",
-                 "Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108",
-                 "Pikes Peak, Colorado",
-                 "The Mark Twain House & Museum, Farmington Avenue, Hartford, CT",
-                 "New Castle Historic District, Delaware",
-                 "White House, Pennsylvania Avenue Northwest, Washington, DC",
-                 "Cape Canaveral, FL",
-                 "Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA",
-                 "Craters of the Moon National Monument & Preserve, Arco, ID",
-                 "Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL",
-                 "West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN",
-                 "Terrace Hill, Grand Avenue, Des Moines, IA",
-                 "C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS",
-                 "Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY",
-                 "French Quarter, New Orleans, LA",
-                 "Acadia National Park, Maine",
-                 "Maryland State House, 100 State Cir, Annapolis, MD 21401",
-                 "USS Constitution, Boston, MA",
-                 "Olympia Entertainment, Woodward Avenue, Detroit, MI",
-                 "Fort Snelling, Tower Avenue, Saint Paul, MN",
-                 "Vicksburg National Military Park, Clay Street, Vicksburg, MS",
-                 "Gateway Arch, Washington Avenue, St Louis, MO",
-                 "Glacier National Park, West Glacier, MT",
-                 "Ashfall Fossil Bed, Royal, NE",
-                 "Hoover Dam, NV",
-                 "Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH",
-                 "Congress Hall, Congress Place, Cape May, NJ 08204",
-                 "Carlsbad Caverns National Park, Carlsbad, NM",
-                 "Statue of Liberty, Liberty Island, NYC, NY",
-                 "Wright Brothers National Memorial Visitor Center, Manteo, NC",
-                 "Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND",
-                 "Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH",
-                 "Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086",
-                 "Columbia River Gorge National Scenic Area, Oregon",
-                 "Liberty Bell, 6th Street, Philadelphia, PA",
-                 "The Breakers, Ochre Point Avenue, Newport, RI",
-                 "Fort Sumter National Monument, Sullivan's Island, SC",
-                 "Mount Rushmore National Memorial, South Dakota 244, Keystone, SD",
-                 "Graceland, Elvis Presley Boulevard, Memphis, TN",
-                 "The Alamo, Alamo Plaza, San Antonio, TX",
-                 "Bryce Canyon National Park, Hwy 63, Bryce, UT",
-                 "Shelburne Farms, Harbor Road, Shelburne, VT",
-                 "Mount Vernon, Fairfax County, Virginia",
-                 "Hanford Site, Benton County, WA",
-                 "Lost World Caverns, Lewisburg, WV",
-                 "Taliesin, County Road C, Spring Green, Wisconsin",
-                 "Yellowstone National Park, WY 82190"]
-
-def CreateOptimalRouteHtmlFile(optimal_route, distance, display=True):
-    optimal_route = list(optimal_route)
-    optimal_route += [optimal_route[0]]
-
-    Page_1 = """
-    <!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
-        <meta name="description" content="Randy Olson uses machine learning to find the optimal road trip across the U.S.">
-        <meta name="author" content="Randal S. Olson">
-        
-        <title>The optimal road trip across the U.S. according to machine learning</title>
-        <style>
-          html, body, #map-canvas {
-            height: 100%;
-            margin: 0px;
-            padding: 0px
-          }
-          #panel {
-            position: absolute;
-            top: 5px;
-            left: 50%;
-            margin-left: -180px;
-            z-index: 5;
-            background-color: #fff;
-            padding: 10px;
-            border: 1px solid #999;
-          }
-        </style>
-        <script src="https://maps.googleapis.com/maps/api/js?v=3.exp&signed_in=true"></script>
-        <script>
-            var routes_list = []
-            var markerOptions = {icon: "http://maps.gstatic.com/mapfiles/markers2/marker.png"};
-            var directionsDisplayOptions = {preserveViewport: true,
-                                            markerOptions: markerOptions};
-            var directionsService = new google.maps.DirectionsService();
-            var map;
-
-            function initialize() {
-              var center = new google.maps.LatLng(39, -96);
-              var mapOptions = {
-                zoom: 5,
-                center: center
-              };
-              map = new google.maps.Map(document.getElementById('map-canvas'), mapOptions);
-              for (i=0; i<routes_list.length; i++) {
-                routes_list[i].setMap(map); 
-              }
-            }
-
-            function calcRoute(start, end, routes) {
-              
-              var directionsDisplay = new google.maps.DirectionsRenderer(directionsDisplayOptions);
-
-              var waypts = [];
-              for (var i = 0; i < routes.length; i++) {
-                waypts.push({
-                  location:routes[i],
-                  stopover:true});
-                }
-              
-              var request = {
-                  origin: start,
-                  destination: end,
-                  waypoints: waypts,
-                  optimizeWaypoints: false,
-                  travelMode: google.maps.TravelMode.DRIVING
-              };
-
-              directionsService.route(request, function(response, status) {
-                if (status == google.maps.DirectionsStatus.OK) {
-                    directionsDisplay.setDirections(response);      
-                }
-              });
-
-              routes_list.push(directionsDisplay);
-            }
-
-            function createRoutes(route) {
-                // Google's free map API is limited to 10 waypoints so need to break into batches
-                route.push(route[0]);
-                var subset = 0;
-                while (subset < route.length) {
-                    var waypointSubset = route.slice(subset, subset + 10);
-
-                    var startPoint = waypointSubset[0];
-                    var midPoints = waypointSubset.slice(1, waypointSubset.length - 1);
-                    var endPoint = waypointSubset[waypointSubset.length - 1];
-
-                    calcRoute(startPoint, endPoint, midPoints);
-
-                    subset += 9;
-                }
-            }
-    """
-    Page_2 = """
-            
-            createRoutes(optimal_route);
-
-            google.maps.event.addDomListener(window, 'load', initialize);
-
-        </script>
-      </head>
-      <body>
-        <div id="map-canvas"></div>
-      </body>
-    </html>
-    """
-
-    localoutput_file = output_file.replace('.html', '_' + str(distance) + '.html')
-    with open(localoutput_file, 'w') as fs:
-        fs.write(Page_1)
-        fs.write("\t\t\toptimal_route = {0}".format(str(optimal_route)))
-        fs.write(Page_2)
-
-    if display:
-        webbrowser.open_new_tab(localoutput_file)
-
-
-def compute_fitness(solution):
-    """
-        This function returns the total distance traveled on the current road trip.
-        
-        The genetic algorithm will favor road trips that have shorter
-        total distances traveled.
-    """
-    
-    solution_fitness = 0.0
-    
-    for index in range(len(solution)):
-        waypoint1 = solution[index - 1]
-        waypoint2 = solution[index]
-        solution_fitness += waypoint_distances[frozenset([waypoint1, waypoint2])]
-        
-    return solution_fitness
-
-def generate_random_agent():
-    """
-        Creates a random road trip from the waypoints.
-    """
-    
-    new_random_agent = list(all_waypoints)
-    random.shuffle(new_random_agent)
-    return tuple(new_random_agent)
-
-def mutate_agent(agent_genome, max_mutations=3):
-    """
-        Applies 1 - `max_mutations` point mutations to the given road trip.
-        
-        A point mutation swaps the order of two waypoints in the road trip.
-    """
-    
-    agent_genome = list(agent_genome)
-    num_mutations = random.randint(1, max_mutations)
-    
-    for mutation in range(num_mutations):
-        swap_index1 = random.randint(0, len(agent_genome) - 1)
-        swap_index2 = swap_index1
-
-        while swap_index1 == swap_index2:
-            swap_index2 = random.randint(0, len(agent_genome) - 1)
-
-        agent_genome[swap_index1], agent_genome[swap_index2] = agent_genome[swap_index2], agent_genome[swap_index1]
-            
-    return tuple(agent_genome)
-
-def shuffle_mutation(agent_genome):
-    """
-        Applies a single shuffle mutation to the given road trip.
-        
-        A shuffle mutation takes a random sub-section of the road trip
-        and moves it to another location in the road trip.
-    """
-    
-    agent_genome = list(agent_genome)
-    
-    start_index = random.randint(0, len(agent_genome) - 1)
-    length = random.randint(2, 20)
-    
-    genome_subset = agent_genome[start_index:start_index + length]
-    agent_genome = agent_genome[:start_index] + agent_genome[start_index + length:]
-    
-    insert_index = random.randint(0, len(agent_genome) + len(genome_subset) - 1)
-    agent_genome = agent_genome[:insert_index] + genome_subset + agent_genome[insert_index:]
-    
-    return tuple(agent_genome)
-
-def generate_random_population(pop_size):
-    """
-        Generates a list with `pop_size` number of random road trips.
-    """
-    
-    random_population = []
-    for agent in range(pop_size):
-        random_population.append(generate_random_agent())
-    return random_population
-    
-def run_genetic_algorithm(generations=5000, population_size=100):
-    """
-        The core of the Genetic Algorithm.
-        
-        `generations` and `population_size` must be a multiple of 10.
-    """
-    
-    current_best_distance = -1
-    population_subset_size = int(population_size / 10.)
-    generations_10pct = int(generations / 10.)
-    
-    # Create a random population of `population_size` number of solutions.
-    population = generate_random_population(population_size)
-
-    # For `generations` number of repetitions...
-    for generation in range(generations):
-        
-        # Compute the fitness of the entire current population
-        population_fitness = {}
-
-        for agent_genome in population:
-            if agent_genome in population_fitness:
-                continue
-
-            population_fitness[agent_genome] = compute_fitness(agent_genome)
-
-        # Take the top 10% shortest road trips and produce offspring each from them
-        new_population = []
-        for rank, agent_genome in enumerate(sorted(population_fitness,
-                                                   key=population_fitness.get)[:population_subset_size]):
-            if (generation % generations_10pct == 0 or generation == generations - 1) and rank == 0:
-                current_best_genome = agent_genome
-                print("Generation %d best: %d | Unique genomes: %d" % (generation,
-                                                                       population_fitness[agent_genome],
-                                                                       len(population_fitness)))
-                print(agent_genome)                
-                print("")
-
-                # If this is the first route found, or it is shorter than the best route we know,
-                # create a html output and display it
-                if population_fitness[agent_genome] < current_best_distance or current_best_distance < 0:
-                    current_best_distance = population_fitness[agent_genome]
-                    CreateOptimalRouteHtmlFile(agent_genome, current_best_distance, False)
-                    
-
-            # Create 1 exact copy of each of the top road trips
-            new_population.append(agent_genome)
-
-            # Create 2 offspring with 1-3 point mutations
-            for offspring in range(2):
-                new_population.append(mutate_agent(agent_genome, 3))
-                
-            # Create 7 offspring with a single shuffle mutation
-            for offspring in range(7):
-                new_population.append(shuffle_mutation(agent_genome))
-
-        # Replace the old population with the new population of offspring 
-        for i in range(len(population))[::-1]:
-            del population[i]
-
-        population = new_population
-    return current_best_genome
-
-
-if __name__ == '__main__':
-    # If this file exists, read the data stored in it - if not then collect data by asking google
-    print("Begin finding shortest route")
-    file_path = waypoints_file
-    if os.path.exists(file_path):
-        print("Waypoints exist")
-        #file exists used saved results
-        waypoint_distances = {}
-        waypoint_durations = {}
-        all_waypoints = set()
-
-        waypoint_data = pd.read_csv(file_path, sep="\t")
-
-        for i, row in waypoint_data.iterrows():
-            waypoint_distances[frozenset([row.waypoint1, row.waypoint2])] = row.distance_m
-            waypoint_durations[frozenset([row.waypoint1, row.waypoint2])] = row.duration_s
-            all_waypoints.update([row.waypoint1, row.waypoint2])
-
-    else:
-        # File does not exist - compute results       
-        print("Collecting Waypoints")
-        waypoint_distances = {}
-        waypoint_durations = {}
-
-
-        gmaps = googlemaps.Client(GOOGLE_MAPS_API_KEY)
-        for (waypoint1, waypoint2) in combinations(all_waypoints, 2):
-            try:
-                route = gmaps.distance_matrix(origins=[waypoint1],
-                                              destinations=[waypoint2],
-                                              mode="driving", # Change to "walking" for walking directions,
-                                                              # "bicycling" for biking directions, etc.
-                                              language="English",
-                                              units="metric")
-
-                # "distance" is in meters
-                distance = route["rows"][0]["elements"][0]["distance"]["value"]
-
-                # "duration" is in seconds
-                duration = route["rows"][0]["elements"][0]["duration"]["value"]
-
-                waypoint_distances[frozenset([waypoint1, waypoint2])] = distance
-                waypoint_durations[frozenset([waypoint1, waypoint2])] = duration
-        
-            except Exception as e:
-                print("Error with finding the route between %s and %s." % (waypoint1, waypoint2))
-        
-        print("Saving Waypoints")
-        with open(waypoints_file, "w") as out_file:
-            out_file.write("\t".join(["waypoint1",
-                                      "waypoint2",
-                                      "distance_m",
-                                      "duration_s"]))
-        
-            for (waypoint1, waypoint2) in waypoint_distances.keys():
-                out_file.write("\n" +
-                               "\t".join([waypoint1,
-                                          waypoint2,
-                                          str(waypoint_distances[frozenset([waypoint1, waypoint2])]),
-                                          str(waypoint_durations[frozenset([waypoint1, waypoint2])])]))
-
-    print("Search for optimal route")
-    optimal_route = run_genetic_algorithm(generations=thisRunGenerations, population_size=thisRunPopulation_size)
-
-    # This is probably redundant now that the files are created in run_genetic_algorithm,
-    # but leaving it active to ensure  the final result is not lost
-    CreateOptimalRouteHtmlFile(optimal_route, 1, True)
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "4b0efda8",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-09-20T18:00:19.252531Z",
+     "iopub.status.busy": "2025-09-20T18:00:19.252270Z",
+     "iopub.status.idle": "2025-09-20T18:00:23.205492Z",
+     "shell.execute_reply": "2025-09-20T18:00:23.204657Z"
+    },
+    "papermill": {
+     "duration": 3.957561,
+     "end_time": "2025-09-20T18:00:23.206819",
+     "exception": false,
+     "start_time": "2025-09-20T18:00:19.249258",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Requirement already satisfied: pandas in /usr/local/lib/python3.11/dist-packages (2.2.3)\r\n",
+      "Requirement already satisfied: numpy>=1.23.2 in /usr/local/lib/python3.11/dist-packages (from pandas) (1.26.4)\r\n",
+      "Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.11/dist-packages (from pandas) (2.9.0.post0)\r\n",
+      "Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.11/dist-packages (from pandas) (2025.2)\r\n",
+      "Requirement already satisfied: tzdata>=2022.7 in /usr/local/lib/python3.11/dist-packages (from pandas) (2025.2)\r\n",
+      "Requirement already satisfied: mkl_fft in /usr/local/lib/python3.11/dist-packages (from numpy>=1.23.2->pandas) (1.3.8)\r\n",
+      "Requirement already satisfied: mkl_random in /usr/local/lib/python3.11/dist-packages (from numpy>=1.23.2->pandas) (1.2.4)\r\n",
+      "Requirement already satisfied: mkl_umath in /usr/local/lib/python3.11/dist-packages (from numpy>=1.23.2->pandas) (0.1.1)\r\n",
+      "Requirement already satisfied: mkl in /usr/local/lib/python3.11/dist-packages (from numpy>=1.23.2->pandas) (2025.2.0)\r\n",
+      "Requirement already satisfied: tbb4py in /usr/local/lib/python3.11/dist-packages (from numpy>=1.23.2->pandas) (2022.2.0)\r\n",
+      "Requirement already satisfied: mkl-service in /usr/local/lib/python3.11/dist-packages (from numpy>=1.23.2->pandas) (2.4.1)\r\n",
+      "Requirement already satisfied: six>=1.5 in /usr/local/lib/python3.11/dist-packages (from python-dateutil>=2.8.2->pandas) (1.17.0)\r\n",
+      "Requirement already satisfied: intel-openmp<2026,>=2024 in /usr/local/lib/python3.11/dist-packages (from mkl->numpy>=1.23.2->pandas) (2024.2.0)\r\n",
+      "Requirement already satisfied: tbb==2022.* in /usr/local/lib/python3.11/dist-packages (from mkl->numpy>=1.23.2->pandas) (2022.2.0)\r\n",
+      "Requirement already satisfied: tcmlib==1.* in /usr/local/lib/python3.11/dist-packages (from tbb==2022.*->mkl->numpy>=1.23.2->pandas) (1.4.0)\r\n",
+      "Requirement already satisfied: intel-cmplr-lib-rt in /usr/local/lib/python3.11/dist-packages (from mkl_umath->numpy>=1.23.2->pandas) (2024.2.0)\r\n",
+      "Requirement already satisfied: intel-cmplr-lib-ur==2024.2.0 in /usr/local/lib/python3.11/dist-packages (from intel-openmp<2026,>=2024->mkl->numpy>=1.23.2->pandas) (2024.2.0)\r\n",
+      "Note: you may need to restart the kernel to use updated packages.\n"
+     ]
+    }
+   ],
+   "source": [
+    "pip install pandas"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "3c404b33",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-09-20T18:00:23.212555Z",
+     "iopub.status.busy": "2025-09-20T18:00:23.211824Z",
+     "iopub.status.idle": "2025-09-20T18:00:28.604961Z",
+     "shell.execute_reply": "2025-09-20T18:00:28.603825Z"
+    },
+    "papermill": {
+     "duration": 5.397427,
+     "end_time": "2025-09-20T18:00:28.606486",
+     "exception": false,
+     "start_time": "2025-09-20T18:00:23.209059",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Collecting googlemaps\r\n",
+      "  Downloading googlemaps-4.10.0.tar.gz (33 kB)\r\n",
+      "  Preparing metadata (setup.py) ... \u001b[?25l\u001b[?25hdone\r\n",
+      "Requirement already satisfied: requests<3.0,>=2.20.0 in /usr/local/lib/python3.11/dist-packages (from googlemaps) (2.32.4)\r\n",
+      "Requirement already satisfied: charset_normalizer<4,>=2 in /usr/local/lib/python3.11/dist-packages (from requests<3.0,>=2.20.0->googlemaps) (3.4.2)\r\n",
+      "Requirement already satisfied: idna<4,>=2.5 in /usr/local/lib/python3.11/dist-packages (from requests<3.0,>=2.20.0->googlemaps) (3.10)\r\n",
+      "Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/local/lib/python3.11/dist-packages (from requests<3.0,>=2.20.0->googlemaps) (2.5.0)\r\n",
+      "Requirement already satisfied: certifi>=2017.4.17 in /usr/local/lib/python3.11/dist-packages (from requests<3.0,>=2.20.0->googlemaps) (2025.6.15)\r\n",
+      "Building wheels for collected packages: googlemaps\r\n",
+      "  Building wheel for googlemaps (setup.py) ... \u001b[?25l\u001b[?25hdone\r\n",
+      "  Created wheel for googlemaps: filename=googlemaps-4.10.0-py3-none-any.whl size=40714 sha256=74dfdb27f4bfccca6c87b3d55b64345a0939ed386c6ac13100f60720cf76b7be\r\n",
+      "  Stored in directory: /root/.cache/pip/wheels/f1/09/77/3cc2f5659cbc62341b30f806aca2b25e6a26c351daa5b1f49a\r\n",
+      "Successfully built googlemaps\r\n",
+      "Installing collected packages: googlemaps\r\n",
+      "Successfully installed googlemaps-4.10.0\r\n",
+      "Note: you may need to restart the kernel to use updated packages.\n"
+     ]
+    }
+   ],
+   "source": [
+    "pip install googlemaps"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "f6dd1c60",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "execution": {
+     "iopub.execute_input": "2025-09-20T18:00:28.612405Z",
+     "iopub.status.busy": "2025-09-20T18:00:28.611829Z",
+     "iopub.status.idle": "2025-09-20T18:00:39.467778Z",
+     "shell.execute_reply": "2025-09-20T18:00:39.466876Z"
+    },
+    "papermill": {
+     "duration": 10.860527,
+     "end_time": "2025-09-20T18:00:39.469235",
+     "exception": false,
+     "start_time": "2025-09-20T18:00:28.608708",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Begin finding shortest route\n",
+      "Waypoints exist\n",
+      "Search for optimal route\n",
+      "Generation 0 best: 89815976 | Unique genomes: 100\n",
+      "('Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Hanford Site, Benton County, WA', 'Glacier National Park, West Glacier, MT', 'Acadia National Park, Maine', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Columbia River Gorge National Scenic Area, Oregon', 'New Castle Historic District, Delaware', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Cape Canaveral, FL', 'Lost World Caverns, Lewisburg, WV', 'Grand Canyon National Park, Arizona', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Carlsbad Caverns National Park, Carlsbad, NM', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', 'The Breakers, Ochre Point Avenue, Newport, RI', 'Liberty Bell, 6th Street, Philadelphia, PA', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'Hoover Dam, NV', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'USS Alabama, Battleship Parkway, Mobile, AL', 'San Andreas Fault, San Benito County, CA', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'French Quarter, New Orleans, LA', 'Pikes Peak, Colorado', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'Toltec Mounds, Scott, AR', 'USS Constitution, Boston, MA', 'Mount Vernon, Fairfax County, Virginia', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Yellowstone National Park, WY 82190', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'Ashfall Fossil Bed, Royal, NE')\n",
+      "\n",
+      "Generation 500 best: 25683512 | Unique genomes: 97\n",
+      "('Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'Ashfall Fossil Bed, Royal, NE', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Pikes Peak, Colorado', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Glacier National Park, West Glacier, MT', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Grand Canyon National Park, Arizona', 'Hoover Dam, NV', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Mount Vernon, Fairfax County, Virginia', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'Liberty Bell, 6th Street, Philadelphia, PA', 'Statue of Liberty, Liberty Island, NYC, NY', 'USS Constitution, Boston, MA', 'The Breakers, Ochre Point Avenue, Newport, RI', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'New Castle Historic District, Delaware', 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086')\n",
+      "\n",
+      "Generation 1000 best: 23271926 | Unique genomes: 96\n",
+      "('Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Ashfall Fossil Bed, Royal, NE', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Glacier National Park, West Glacier, MT', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Mount Vernon, Fairfax County, Virginia', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Liberty Bell, 6th Street, Philadelphia, PA', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'USS Constitution, Boston, MA', 'The Breakers, Ochre Point Avenue, Newport, RI', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Statue of Liberty, Liberty Island, NYC, NY', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401')\n",
+      "\n",
+      "Generation 1500 best: 22474644 | Unique genomes: 93\n",
+      "('Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Mount Vernon, Fairfax County, Virginia', 'Liberty Bell, 6th Street, Philadelphia, PA', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Statue of Liberty, Liberty Island, NYC, NY', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND', 'Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA')\n",
+      "\n",
+      "Generation 2000 best: 22325534 | Unique genomes: 98\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n",
+      "Generation 2500 best: 22325534 | Unique genomes: 98\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n",
+      "Generation 3000 best: 22325534 | Unique genomes: 98\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n",
+      "Generation 3500 best: 22325534 | Unique genomes: 92\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n",
+      "Generation 4000 best: 22325534 | Unique genomes: 96\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n",
+      "Generation 4500 best: 22325534 | Unique genomes: 95\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n",
+      "Generation 4999 best: 22325534 | Unique genomes: 97\n",
+      "('Glacier National Park, West Glacier, MT', 'Yellowstone National Park, WY 82190', 'Craters of the Moon National Monument & Preserve, Arco, ID', 'Hanford Site, Benton County, WA', 'Columbia River Gorge National Scenic Area, Oregon', 'Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108', 'San Andreas Fault, San Benito County, CA', 'Hoover Dam, NV', 'Grand Canyon National Park, Arizona', 'Bryce Canyon National Park, Hwy 63, Bryce, UT', 'Pikes Peak, Colorado', 'Carlsbad Caverns National Park, Carlsbad, NM', 'The Alamo, Alamo Plaza, San Antonio, TX', 'Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086', 'Toltec Mounds, Scott, AR', 'Graceland, Elvis Presley Boulevard, Memphis, TN', 'Vicksburg National Military Park, Clay Street, Vicksburg, MS', 'French Quarter, New Orleans, LA', 'USS Alabama, Battleship Parkway, Mobile, AL', 'Cape Canaveral, FL', 'Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA', \"Fort Sumter National Monument, Sullivan's Island, SC\", 'Wright Brothers National Memorial Visitor Center, Manteo, NC', 'Congress Hall, Congress Place, Cape May, NJ 08204', 'Statue of Liberty, Liberty Island, NYC, NY', 'The Mark Twain House & Museum, Farmington Avenue, Hartford, CT', 'The Breakers, Ochre Point Avenue, Newport, RI', 'USS Constitution, Boston, MA', 'Acadia National Park, Maine', 'Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH', 'Shelburne Farms, Harbor Road, Shelburne, VT', 'Liberty Bell, 6th Street, Philadelphia, PA', 'New Castle Historic District, Delaware', 'Maryland State House, 100 State Cir, Annapolis, MD 21401', 'White House, Pennsylvania Avenue Northwest, Washington, DC', 'Mount Vernon, Fairfax County, Virginia', 'Lost World Caverns, Lewisburg, WV', 'Olympia Entertainment, Woodward Avenue, Detroit, MI', 'Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH', 'Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY', 'West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN', 'Gateway Arch, Washington Avenue, St Louis, MO', 'Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL', 'Taliesin, County Road C, Spring Green, Wisconsin', 'Fort Snelling, Tower Avenue, Saint Paul, MN', 'Terrace Hill, Grand Avenue, Des Moines, IA', 'C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS', 'Ashfall Fossil Bed, Royal, NE', 'Mount Rushmore National Memorial, South Dakota 244, Keystone, SD', 'Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND')\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "\"\"\"\n",
+    "Randy Olson's Shortest Route Program modified By Andrew Liesinger to:\n",
+    "    1: Detect waypoints file at runtime - if found use it, otherwise look up distances via google calls (and then save to waypoint file)\n",
+    "    2: Dynamically create and open an HTML file showing the route when a shorter route is found\n",
+    "    3: Make it easier to tinker with the Generation / Population parameters\n",
+    "\"\"\"\n",
+    "from __future__ import print_function\n",
+    "from itertools import combinations\n",
+    "import googlemaps\n",
+    "import pandas as pd\n",
+    "import numpy as np\n",
+    "import os.path\n",
+    "import random\n",
+    "import webbrowser\n",
+    "\n",
+    "GOOGLE_MAPS_API_KEY = \"Add you own API\"\n",
+    "waypoints_file = \"/kaggle/input/my-waypoints-dist-dur/my-waypoints-dist-dur.tsv\"\n",
+    "\n",
+    "#This is the general filename - as shorter routes are discovered the Population fitness score will be inserted into the filename\n",
+    "#so that interim results are saved for comparision.  The actual filenames using the default below will be:\n",
+    "#Output_<Population Fitness Score>.html \n",
+    "output_file = 'Output.html'\n",
+    "\n",
+    "#parameters for the Genetic algoritim\n",
+    "thisRunGenerations=5000\n",
+    "thisRunPopulation_size=100\n",
+    "\n",
+    "\n",
+    "all_waypoints = [\"USS Alabama, Battleship Parkway, Mobile, AL\",\n",
+    "                 \"Grand Canyon National Park, Arizona\",\n",
+    "                 \"Toltec Mounds, Scott, AR\",\n",
+    "                 \"San Andreas Fault, San Benito County, CA\",\n",
+    "                 \"Cable Car Museum, 94108, 1201 Mason St, San Francisco, CA 94108\",\n",
+    "                 \"Pikes Peak, Colorado\",\n",
+    "                 \"The Mark Twain House & Museum, Farmington Avenue, Hartford, CT\",\n",
+    "                 \"New Castle Historic District, Delaware\",\n",
+    "                 \"White House, Pennsylvania Avenue Northwest, Washington, DC\",\n",
+    "                 \"Cape Canaveral, FL\",\n",
+    "                 \"Okefenokee Swamp Park, Okefenokee Swamp Park Road, Waycross, GA\",\n",
+    "                 \"Craters of the Moon National Monument & Preserve, Arco, ID\",\n",
+    "                 \"Lincoln Home National Historic Site Visitor Center, 426 South 7th Street, Springfield, IL\",\n",
+    "                 \"West Baden Springs Hotel, West Baden Avenue, West Baden Springs, IN\",\n",
+    "                 \"Terrace Hill, Grand Avenue, Des Moines, IA\",\n",
+    "                 \"C. W. Parker Carousel Museum, South Esplanade Street, Leavenworth, KS\",\n",
+    "                 \"Mammoth Cave National Park, Mammoth Cave Pkwy, Mammoth Cave, KY\",\n",
+    "                 \"French Quarter, New Orleans, LA\",\n",
+    "                 \"Acadia National Park, Maine\",\n",
+    "                 \"Maryland State House, 100 State Cir, Annapolis, MD 21401\",\n",
+    "                 \"USS Constitution, Boston, MA\",\n",
+    "                 \"Olympia Entertainment, Woodward Avenue, Detroit, MI\",\n",
+    "                 \"Fort Snelling, Tower Avenue, Saint Paul, MN\",\n",
+    "                 \"Vicksburg National Military Park, Clay Street, Vicksburg, MS\",\n",
+    "                 \"Gateway Arch, Washington Avenue, St Louis, MO\",\n",
+    "                 \"Glacier National Park, West Glacier, MT\",\n",
+    "                 \"Ashfall Fossil Bed, Royal, NE\",\n",
+    "                 \"Hoover Dam, NV\",\n",
+    "                 \"Omni Mount Washington Resort, Mount Washington Hotel Road, Bretton Woods, NH\",\n",
+    "                 \"Congress Hall, Congress Place, Cape May, NJ 08204\",\n",
+    "                 \"Carlsbad Caverns National Park, Carlsbad, NM\",\n",
+    "                 \"Statue of Liberty, Liberty Island, NYC, NY\",\n",
+    "                 \"Wright Brothers National Memorial Visitor Center, Manteo, NC\",\n",
+    "                 \"Fort Union Trading Post National Historic Site, Williston, North Dakota 1804, ND\",\n",
+    "                 \"Spring Grove Cemetery, Spring Grove Avenue, Cincinnati, OH\",\n",
+    "                 \"Chickasaw National Recreation Area, 1008 W 2nd St, Sulphur, OK 73086\",\n",
+    "                 \"Columbia River Gorge National Scenic Area, Oregon\",\n",
+    "                 \"Liberty Bell, 6th Street, Philadelphia, PA\",\n",
+    "                 \"The Breakers, Ochre Point Avenue, Newport, RI\",\n",
+    "                 \"Fort Sumter National Monument, Sullivan's Island, SC\",\n",
+    "                 \"Mount Rushmore National Memorial, South Dakota 244, Keystone, SD\",\n",
+    "                 \"Graceland, Elvis Presley Boulevard, Memphis, TN\",\n",
+    "                 \"The Alamo, Alamo Plaza, San Antonio, TX\",\n",
+    "                 \"Bryce Canyon National Park, Hwy 63, Bryce, UT\",\n",
+    "                 \"Shelburne Farms, Harbor Road, Shelburne, VT\",\n",
+    "                 \"Mount Vernon, Fairfax County, Virginia\",\n",
+    "                 \"Hanford Site, Benton County, WA\",\n",
+    "                 \"Lost World Caverns, Lewisburg, WV\",\n",
+    "                 \"Taliesin, County Road C, Spring Green, Wisconsin\",\n",
+    "                 \"Yellowstone National Park, WY 82190\"]\n",
+    "\n",
+    "def CreateOptimalRouteHtmlFile(optimal_route, distance, display=True):\n",
+    "    optimal_route = list(optimal_route)\n",
+    "    optimal_route += [optimal_route[0]]\n",
+    "\n",
+    "    Page_1 = \"\"\"\n",
+    "    <!DOCTYPE html>\n",
+    "    <html lang=\"en\">\n",
+    "      <head>\n",
+    "        <meta charset=\"utf-8\">\n",
+    "        <meta name=\"viewport\" content=\"initial-scale=1.0, user-scalable=no\">\n",
+    "        <meta name=\"description\" content=\"Randy Olson uses machine learning to find the optimal road trip across the U.S.\">\n",
+    "        <meta name=\"author\" content=\"Randal S. Olson\">\n",
+    "        \n",
+    "        <title>The optimal road trip across the U.S. according to machine learning</title>\n",
+    "        <style>\n",
+    "          html, body, #map-canvas {\n",
+    "            height: 100%;\n",
+    "            margin: 0px;\n",
+    "            padding: 0px\n",
+    "          }\n",
+    "          #panel {\n",
+    "            position: absolute;\n",
+    "            top: 5px;\n",
+    "            left: 50%;\n",
+    "            margin-left: -180px;\n",
+    "            z-index: 5;\n",
+    "            background-color: #fff;\n",
+    "            padding: 10px;\n",
+    "            border: 1px solid #999;\n",
+    "          }\n",
+    "        </style>\n",
+    "        <script src=\"https://maps.googleapis.com/maps/api/js?v=3.exp&signed_in=true\"></script>\n",
+    "        <script>\n",
+    "            var routes_list = []\n",
+    "            var markerOptions = {icon: \"http://maps.gstatic.com/mapfiles/markers2/marker.png\"};\n",
+    "            var directionsDisplayOptions = {preserveViewport: true,\n",
+    "                                            markerOptions: markerOptions};\n",
+    "            var directionsService = new google.maps.DirectionsService();\n",
+    "            var map;\n",
+    "\n",
+    "            function initialize() {\n",
+    "              var center = new google.maps.LatLng(39, -96);\n",
+    "              var mapOptions = {\n",
+    "                zoom: 5,\n",
+    "                center: center\n",
+    "              };\n",
+    "              map = new google.maps.Map(document.getElementById('map-canvas'), mapOptions);\n",
+    "              for (i=0; i<routes_list.length; i++) {\n",
+    "                routes_list[i].setMap(map); \n",
+    "              }\n",
+    "            }\n",
+    "\n",
+    "            function calcRoute(start, end, routes) {\n",
+    "              \n",
+    "              var directionsDisplay = new google.maps.DirectionsRenderer(directionsDisplayOptions);\n",
+    "\n",
+    "              var waypts = [];\n",
+    "              for (var i = 0; i < routes.length; i++) {\n",
+    "                waypts.push({\n",
+    "                  location:routes[i],\n",
+    "                  stopover:true});\n",
+    "                }\n",
+    "              \n",
+    "              var request = {\n",
+    "                  origin: start,\n",
+    "                  destination: end,\n",
+    "                  waypoints: waypts,\n",
+    "                  optimizeWaypoints: false,\n",
+    "                  travelMode: google.maps.TravelMode.DRIVING\n",
+    "              };\n",
+    "\n",
+    "              directionsService.route(request, function(response, status) {\n",
+    "                if (status == google.maps.DirectionsStatus.OK) {\n",
+    "                    directionsDisplay.setDirections(response);      \n",
+    "                }\n",
+    "              });\n",
+    "\n",
+    "              routes_list.push(directionsDisplay);\n",
+    "            }\n",
+    "\n",
+    "            function createRoutes(route) {\n",
+    "                // Google's free map API is limited to 10 waypoints so need to break into batches\n",
+    "                route.push(route[0]);\n",
+    "                var subset = 0;\n",
+    "                while (subset < route.length) {\n",
+    "                    var waypointSubset = route.slice(subset, subset + 10);\n",
+    "\n",
+    "                    var startPoint = waypointSubset[0];\n",
+    "                    var midPoints = waypointSubset.slice(1, waypointSubset.length - 1);\n",
+    "                    var endPoint = waypointSubset[waypointSubset.length - 1];\n",
+    "\n",
+    "                    calcRoute(startPoint, endPoint, midPoints);\n",
+    "\n",
+    "                    subset += 9;\n",
+    "                }\n",
+    "            }\n",
+    "    \"\"\"\n",
+    "    Page_2 = \"\"\"\n",
+    "            \n",
+    "            createRoutes(optimal_route);\n",
+    "\n",
+    "            google.maps.event.addDomListener(window, 'load', initialize);\n",
+    "\n",
+    "        </script>\n",
+    "      </head>\n",
+    "      <body>\n",
+    "        <div id=\"map-canvas\"></div>\n",
+    "      </body>\n",
+    "    </html>\n",
+    "    \"\"\"\n",
+    "\n",
+    "    localoutput_file = output_file.replace('.html', '_' + str(distance) + '.html')\n",
+    "    with open(localoutput_file, 'w') as fs:\n",
+    "        fs.write(Page_1)\n",
+    "        fs.write(\"\\t\\t\\toptimal_route = {0}\".format(str(optimal_route)))\n",
+    "        fs.write(Page_2)\n",
+    "\n",
+    "    if display:\n",
+    "        webbrowser.open_new_tab(localoutput_file)\n",
+    "\n",
+    "\n",
+    "def compute_fitness(solution):\n",
+    "    \"\"\"\n",
+    "        This function returns the total distance traveled on the current road trip.\n",
+    "        \n",
+    "        The genetic algorithm will favor road trips that have shorter\n",
+    "        total distances traveled.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    solution_fitness = 0.0\n",
+    "    \n",
+    "    for index in range(len(solution)):\n",
+    "        waypoint1 = solution[index - 1]\n",
+    "        waypoint2 = solution[index]\n",
+    "        solution_fitness += waypoint_distances[frozenset([waypoint1, waypoint2])]\n",
+    "        \n",
+    "    return solution_fitness\n",
+    "\n",
+    "def generate_random_agent():\n",
+    "    \"\"\"\n",
+    "        Creates a random road trip from the waypoints.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    new_random_agent = list(all_waypoints)\n",
+    "    random.shuffle(new_random_agent)\n",
+    "    return tuple(new_random_agent)\n",
+    "\n",
+    "def mutate_agent(agent_genome, max_mutations=3):\n",
+    "    \"\"\"\n",
+    "        Applies 1 - `max_mutations` point mutations to the given road trip.\n",
+    "        \n",
+    "        A point mutation swaps the order of two waypoints in the road trip.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    agent_genome = list(agent_genome)\n",
+    "    num_mutations = random.randint(1, max_mutations)\n",
+    "    \n",
+    "    for mutation in range(num_mutations):\n",
+    "        swap_index1 = random.randint(0, len(agent_genome) - 1)\n",
+    "        swap_index2 = swap_index1\n",
+    "\n",
+    "        while swap_index1 == swap_index2:\n",
+    "            swap_index2 = random.randint(0, len(agent_genome) - 1)\n",
+    "\n",
+    "        agent_genome[swap_index1], agent_genome[swap_index2] = agent_genome[swap_index2], agent_genome[swap_index1]\n",
+    "            \n",
+    "    return tuple(agent_genome)\n",
+    "\n",
+    "def shuffle_mutation(agent_genome):\n",
+    "    \"\"\"\n",
+    "        Applies a single shuffle mutation to the given road trip.\n",
+    "        \n",
+    "        A shuffle mutation takes a random sub-section of the road trip\n",
+    "        and moves it to another location in the road trip.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    agent_genome = list(agent_genome)\n",
+    "    \n",
+    "    start_index = random.randint(0, len(agent_genome) - 1)\n",
+    "    length = random.randint(2, 20)\n",
+    "    \n",
+    "    genome_subset = agent_genome[start_index:start_index + length]\n",
+    "    agent_genome = agent_genome[:start_index] + agent_genome[start_index + length:]\n",
+    "    \n",
+    "    insert_index = random.randint(0, len(agent_genome) + len(genome_subset) - 1)\n",
+    "    agent_genome = agent_genome[:insert_index] + genome_subset + agent_genome[insert_index:]\n",
+    "    \n",
+    "    return tuple(agent_genome)\n",
+    "\n",
+    "def generate_random_population(pop_size):\n",
+    "    \"\"\"\n",
+    "        Generates a list with `pop_size` number of random road trips.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    random_population = []\n",
+    "    for agent in range(pop_size):\n",
+    "        random_population.append(generate_random_agent())\n",
+    "    return random_population\n",
+    "    \n",
+    "def run_genetic_algorithm(generations=5000, population_size=100):\n",
+    "    \"\"\"\n",
+    "        The core of the Genetic Algorithm.\n",
+    "        \n",
+    "        `generations` and `population_size` must be a multiple of 10.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    current_best_distance = -1\n",
+    "    population_subset_size = int(population_size / 10.)\n",
+    "    generations_10pct = int(generations / 10.)\n",
+    "    \n",
+    "    # Create a random population of `population_size` number of solutions.\n",
+    "    population = generate_random_population(population_size)\n",
+    "\n",
+    "    # For `generations` number of repetitions...\n",
+    "    for generation in range(generations):\n",
+    "        \n",
+    "        # Compute the fitness of the entire current population\n",
+    "        population_fitness = {}\n",
+    "\n",
+    "        for agent_genome in population:\n",
+    "            if agent_genome in population_fitness:\n",
+    "                continue\n",
+    "\n",
+    "            population_fitness[agent_genome] = compute_fitness(agent_genome)\n",
+    "\n",
+    "        # Take the top 10% shortest road trips and produce offspring each from them\n",
+    "        new_population = []\n",
+    "        for rank, agent_genome in enumerate(sorted(population_fitness,\n",
+    "                                                   key=population_fitness.get)[:population_subset_size]):\n",
+    "            if (generation % generations_10pct == 0 or generation == generations - 1) and rank == 0:\n",
+    "                current_best_genome = agent_genome\n",
+    "                print(\"Generation %d best: %d | Unique genomes: %d\" % (generation,\n",
+    "                                                                       population_fitness[agent_genome],\n",
+    "                                                                       len(population_fitness)))\n",
+    "                print(agent_genome)                \n",
+    "                print(\"\")\n",
+    "\n",
+    "                # If this is the first route found, or it is shorter than the best route we know,\n",
+    "                # create a html output and display it\n",
+    "                if population_fitness[agent_genome] < current_best_distance or current_best_distance < 0:\n",
+    "                    current_best_distance = population_fitness[agent_genome]\n",
+    "                    CreateOptimalRouteHtmlFile(agent_genome, current_best_distance, False)\n",
+    "                    \n",
+    "\n",
+    "            # Create 1 exact copy of each of the top road trips\n",
+    "            new_population.append(agent_genome)\n",
+    "\n",
+    "            # Create 2 offspring with 1-3 point mutations\n",
+    "            for offspring in range(2):\n",
+    "                new_population.append(mutate_agent(agent_genome, 3))\n",
+    "                \n",
+    "            # Create 7 offspring with a single shuffle mutation\n",
+    "            for offspring in range(7):\n",
+    "                new_population.append(shuffle_mutation(agent_genome))\n",
+    "\n",
+    "        # Replace the old population with the new population of offspring \n",
+    "        for i in range(len(population))[::-1]:\n",
+    "            del population[i]\n",
+    "\n",
+    "        population = new_population\n",
+    "    return current_best_genome\n",
+    "\n",
+    "\n",
+    "if __name__ == '__main__':\n",
+    "    # If this file exists, read the data stored in it - if not then collect data by asking google\n",
+    "    print(\"Begin finding shortest route\")\n",
+    "    file_path = waypoints_file\n",
+    "    if os.path.exists(file_path):\n",
+    "        print(\"Waypoints exist\")\n",
+    "        #file exists used saved results\n",
+    "        waypoint_distances = {}\n",
+    "        waypoint_durations = {}\n",
+    "        all_waypoints = set()\n",
+    "\n",
+    "        waypoint_data = pd.read_csv(file_path, sep=\"\\t\")\n",
+    "\n",
+    "        for i, row in waypoint_data.iterrows():\n",
+    "            waypoint_distances[frozenset([row.waypoint1, row.waypoint2])] = row.distance_m\n",
+    "            waypoint_durations[frozenset([row.waypoint1, row.waypoint2])] = row.duration_s\n",
+    "            all_waypoints.update([row.waypoint1, row.waypoint2])\n",
+    "\n",
+    "    else:\n",
+    "        # File does not exist - compute results       \n",
+    "        print(\"Collecting Waypoints\")\n",
+    "        waypoint_distances = {}\n",
+    "        waypoint_durations = {}\n",
+    "\n",
+    "\n",
+    "        gmaps = googlemaps.Client(GOOGLE_MAPS_API_KEY)\n",
+    "        for (waypoint1, waypoint2) in combinations(all_waypoints, 2):\n",
+    "            try:\n",
+    "                route = gmaps.distance_matrix(origins=[waypoint1],\n",
+    "                                              destinations=[waypoint2],\n",
+    "                                              mode=\"driving\", # Change to \"walking\" for walking directions,\n",
+    "                                                              # \"bicycling\" for biking directions, etc.\n",
+    "                                              language=\"English\",\n",
+    "                                              units=\"metric\")\n",
+    "\n",
+    "                # \"distance\" is in meters\n",
+    "                distance = route[\"rows\"][0][\"elements\"][0][\"distance\"][\"value\"]\n",
+    "\n",
+    "                # \"duration\" is in seconds\n",
+    "                duration = route[\"rows\"][0][\"elements\"][0][\"duration\"][\"value\"]\n",
+    "\n",
+    "                waypoint_distances[frozenset([waypoint1, waypoint2])] = distance\n",
+    "                waypoint_durations[frozenset([waypoint1, waypoint2])] = duration\n",
+    "        \n",
+    "            except Exception as e:\n",
+    "                print(\"Error with finding the route between %s and %s.\" % (waypoint1, waypoint2))\n",
+    "        \n",
+    "        print(\"Saving Waypoints\")\n",
+    "        with open(waypoints_file, \"w\") as out_file:\n",
+    "            out_file.write(\"\\t\".join([\"waypoint1\",\n",
+    "                                      \"waypoint2\",\n",
+    "                                      \"distance_m\",\n",
+    "                                      \"duration_s\"]))\n",
+    "        \n",
+    "            for (waypoint1, waypoint2) in waypoint_distances.keys():\n",
+    "                out_file.write(\"\\n\" +\n",
+    "                               \"\\t\".join([waypoint1,\n",
+    "                                          waypoint2,\n",
+    "                                          str(waypoint_distances[frozenset([waypoint1, waypoint2])]),\n",
+    "                                          str(waypoint_durations[frozenset([waypoint1, waypoint2])])]))\n",
+    "\n",
+    "    print(\"Search for optimal route\")\n",
+    "    optimal_route = run_genetic_algorithm(generations=thisRunGenerations, population_size=thisRunPopulation_size)\n",
+    "\n",
+    "    # This is probably redundant now that the files are created in run_genetic_algorithm,\n",
+    "    # but leaving it active to ensure  the final result is not lost\n",
+    "    CreateOptimalRouteHtmlFile(optimal_route, 1, True)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "none",
+   "dataSources": [
+    {
+     "datasetId": 8310946,
+     "sourceId": 13119574,
+     "sourceType": "datasetVersion"
+    }
+   ],
+   "dockerImageVersionId": 31089,
+   "isGpuEnabled": false,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.11.13"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 24.488268,
+   "end_time": "2025-09-20T18:00:39.789152",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2025-09-20T18:00:15.300884",
+   "version": "2.6.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
