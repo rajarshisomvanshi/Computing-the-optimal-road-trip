@@ -81,7 +81,7 @@ This repository and its contents are provided under a liberal license to encoura
 
 If you have questions, suggestions, or issues, feel free to:
 
-- Email: rajarshi.somvanshi@gmail.com
+- Email: rajarshisomvanshi2803@gmail.com
 - Open an issue in this repository
 
 I strive to respond within a couple of days.
