@@ -1,4 +1,4 @@
-# Computing the Optimal Road Trip Across the U.S.
+# Computing the Optimal Road Trip.
 
 This project provides the methodology and code for computing the optimal road trip across the United States using a genetic algorithm. The code is implemented in Python and is designed to allow users to input their own list of waypoints and generate an optimized driving route.
 
